@@ -2,11 +2,15 @@ name: Gazeta
 
 on:
   schedule:
+    - cron: "5,15,25,35,45,55 * * * *"
     - cron: "0 1,5,9,13,17,21 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: gazeta
 
 jobs:
   send:
@@ -21,10 +25,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y fonts-dejavu-core
           pip install requests pillow
-      - name: Отправка газеты
+      - name: Обновление страницы и отправка газеты
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          SEND: ${{ github.event.schedule == '0 1,5,9,13,17,21 * * *' || github.event_name == 'workflow_dispatch' }}
         run: python bot.py
       - name: Сохранение страницы
         if: always()
