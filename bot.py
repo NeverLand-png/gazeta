@@ -1,7 +1,6 @@
-import os, re, io, json, html
+import os, re, json, html
 from datetime import datetime, timedelta, timezone
 import requests
-from PIL import Image, ImageDraw, ImageFont
 
 CHANNELS = [
     ("bbcrussian", "BBC", "#bb1919"),
@@ -11,18 +10,11 @@ CHANNELS = [
 TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 MAX_NEWS = 10
-W, M = 1080, 60
-FD = "/usr/share/fonts/truetype/dejavu/"
-PAPER, INK, GRAY = (244, 239, 225), (30, 30, 30), (95, 95, 95)
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня",
           "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 MSK = timezone(timedelta(hours=3))
 SKIP = ("http", "Подробнее", "Открыть", "Фото", "Видео",
         "Защитить себя", "Please open", "VIEW IN")
-
-
-def F(name, size):
-    return ImageFont.truetype(FD + name, size)
 
 
 def strip_junk(s):
@@ -152,68 +144,42 @@ def make_page(posts):
     )
 
 
-def wrap(d, text, font, width):
-    lines, cur = [], ""
-    for w in text.split():
-        test = (cur + " " + w).strip()
-        if d.textlength(test, font=font) <= width:
-            cur = test
+def make_widget_json(posts):
+    data = {}
+    for i in range(1, 7):
+        if i <= len(posts):
+            p = posts[i - 1]
+            data[f"time{i}"] = p["time"].astimezone(MSK).strftime("%H:%M")
+            data[f"src{i}"] = p["src"]
+            data[f"title{i}"] = short(p["title"], 110)
+            data[f"url{i}"] = p["url"]
         else:
-            if cur:
-                lines.append(cur)
-            cur = w
-    if cur:
-        lines.append(cur)
-    return lines
+            data[f"time{i}"] = data[f"src{i}"] = data[f"title{i}"] = data[f"url{i}"] = ""
+    data["count"] = str(len(posts))
+    return json.dumps(data, ensure_ascii=False, indent=1)
 
 
-def make_image(news):
-    img = Image.new("RGB", (W, 8000), PAPER)
-    d = ImageDraw.Draw(img)
-    title_f = F("DejaVuSerif-Bold.ttf", 66)
-    date_f = F("DejaVuSans.ttf", 26)
-    lbl_f = F("DejaVuSans-Bold.ttf", 24)
-    head_f = F("DejaVuSerif-Bold.ttf", 36)
-    body_f = F("DejaVuSerif.ttf", 28)
-
-    y = 50
-    t = "НОВОСТНАЯ ГАЗЕТА"
-    d.text(((W - d.textlength(t, font=title_f)) / 2, y), t, font=title_f, fill=INK)
-    y += 100
-    d.line((M, y, W - M, y), fill=INK, width=4)
-    y += 10
-    d.line((M, y, W - M, y), fill=INK, width=1)
-    y += 16
+def make_text(news):
     now = datetime.now(MSK)
-    names = " · ".join(c[1] for c in CHANNELS)
-    sub = f"{now.day} {MONTHS[now.month - 1]} {now.year} · {names}"
-    d.text(((W - d.textlength(sub, font=date_f)) / 2, y), sub, font=date_f, fill=GRAY)
-    y += 50
-    d.line((M, y, W - M, y), fill=INK, width=2)
-    y += 30
-
-    for i, n in enumerate(news, 1):
-        tm = n["time"].astimezone(MSK).strftime("%H:%M")
-        d.text((M, y), f"{n['src']} · {tm}", font=lbl_f, fill=GRAY)
-        y += 36
-        for line in wrap(d, f"{i}. {n['title']}", head_f, W - 2 * M):
-            d.text((M, y), line, font=head_f, fill=INK)
-            y += 48
-        y += 4
+    out = f"📰 <b>Новости</b> · {now.strftime('%H:%M')}\n"
+    for n in news:
+        t = n["time"].astimezone(MSK).strftime("%H:%M")
+        block = (f"\n<b>{t} · {html.escape(n['src'])}</b>\n"
+                 f'<a href="{html.escape(n["url"])}">{html.escape(n["title"])}</a>\n')
         if n["summary"]:
-            for line in wrap(d, short(n["summary"], 200), body_f, W - 2 * M):
-                d.text((M, y), line, font=body_f, fill=GRAY)
-                y += 38
-        y += 22
-        d.line((M, y, W - M, y), fill=(190, 185, 170), width=1)
-        y += 26
-    return img.crop((0, 0, W, y + 20))
+            block += html.escape(short(n["summary"], 110)) + "\n"
+        if len(out) + len(block) > 3800:
+            break
+        out += block
+    return out
 
 
 def main():
     posts = get_day_posts()
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(make_page(posts))
+    with open("news.json", "w", encoding="utf-8") as f:
+        f.write(make_widget_json(posts))
     print("Новостей за сегодня:", len(posts))
 
     if os.environ.get("SEND") != "true":
@@ -224,18 +190,10 @@ def main():
     if not news:
         print("Новых новостей для бота нет")
         return
-    buf = io.BytesIO()
-    make_image(news).save(buf, "PNG")
-    kb = []
-    for i, n in enumerate(news, 1):
-        name = f"{n['src']}: {n['title']}"
-        if len(name) > 55:
-            name = name[:55] + "…"
-        kb.append([{"text": name, "url": n["url"]}])
     r = requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-        data={"chat_id": CHAT_ID, "reply_markup": json.dumps({"inline_keyboard": kb})},
-        files={"photo": ("gazeta.png", buf.getvalue(), "image/png")},
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        data={"chat_id": CHAT_ID, "text": make_text(news), "parse_mode": "HTML",
+              "disable_web_page_preview": "true"},
         timeout=60,
     )
     print("Телеграм ответил:", r.status_code)
