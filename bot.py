@@ -1,6 +1,7 @@
 import os, re, json, html
 from datetime import datetime, timedelta, timezone
 import requests
+from PIL import Image, ImageDraw, ImageFont, ImageColor
 
 CHANNELS = [
     ("bbcrussian", "BBC", "#bb1919"),
@@ -15,6 +16,14 @@ MONTHS = ["января", "февраля", "марта", "апреля", "ма�
 MSK = timezone(timedelta(hours=3))
 SKIP = ("http", "Подробнее", "Открыть", "Фото", "Видео",
         "Защитить себя", "Please open", "VIEW IN")
+FD = "/usr/share/fonts/truetype/dejavu/"
+PAPER, INK, GRAY = (244, 239, 225), (30, 30, 30), (95, 95, 95)
+RW, RH, HH = 1080, 205, 200
+ROWS = 6
+
+
+def F(name, size):
+    return ImageFont.truetype(FD + name, size)
 
 
 def strip_junk(s):
@@ -174,12 +183,97 @@ def make_text(news):
     return out
 
 
+def wrap(d, text, font, width):
+    lines, cur = [], ""
+    for w in text.split():
+        test = (cur + " " + w).strip()
+        if d.textlength(test, font=font) <= width:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def fit_lines(d, text, font, width, max_lines):
+    lines = wrap(d, text, font, width)
+    if len(lines) <= max_lines:
+        return lines
+    lines = lines[:max_lines]
+    last = lines[-1]
+    while last and d.textlength(last + "…", font=font) > width:
+        last = last[:-1]
+    lines[-1] = last.rstrip() + "…"
+    return lines
+
+
+def save_small(img, path):
+    img.quantize(colors=32).save(path, optimize=True)
+
+
+def make_head():
+    img = Image.new("RGB", (RW, HH), PAPER)
+    d = ImageDraw.Draw(img)
+    title_f = F("DejaVuSerif-Bold.ttf", 62)
+    date_f = F("DejaVuSans.ttf", 26)
+    t = "НОВОСТНАЯ ГАЗЕТА"
+    d.text(((RW - d.textlength(t, font=title_f)) / 2, 26), t, font=title_f, fill=INK)
+    d.line((40, 118, RW - 40, 118), fill=INK, width=5)
+    d.line((40, 128, RW - 40, 128), fill=INK, width=2)
+    now = datetime.now(MSK)
+    names = " · ".join(c[1] for c in CHANNELS)
+    sub = f"{now.day} {MONTHS[now.month - 1]} {now.year} · {names}"
+    d.text(((RW - d.textlength(sub, font=date_f)) / 2, 146), sub, font=date_f, fill=GRAY)
+    d.line((40, HH - 4, RW - 40, HH - 4), fill=INK, width=2)
+    return img
+
+
+def make_row(p):
+    img = Image.new("RGB", (RW, RH), PAPER)
+    d = ImageDraw.Draw(img)
+    if p:
+        lbl_f = F("DejaVuSans-Bold.ttf", 24)
+        head_f = F("DejaVuSerif-Bold.ttf", 34)
+        d.rectangle((0, 12, 14, RH - 12), fill=ImageColor.getrgb(p["color"]))
+        tm = p["time"].astimezone(MSK).strftime("%H:%M")
+        d.text((44, 16), f"{tm} · {p['src']}", font=lbl_f, fill=GRAY)
+        y = 56
+        for line in fit_lines(d, p["title"], head_f, RW - 44 - 40, 3):
+            d.text((44, y), line, font=head_f, fill=INK)
+            y += 44
+    d.line((30, RH - 3, RW - 30, RH - 3), fill=(190, 185, 170), width=2)
+    return img
+
+
+def make_redirect(url):
+    u = html.escape(url)
+    return ('<!DOCTYPE html><html><head><meta charset="utf-8">'
+            f'<meta http-equiv="refresh" content="0; url={u}">'
+            '<title>Открываю…</title></head><body>'
+            f'<script>location.replace({json.dumps(url)})</script>'
+            f'<p><a href="{u}">Открыть новость</a></p></body></html>')
+
+
+def write_widget_files(posts):
+    save_small(make_head(), "head.png")
+    for i in range(1, ROWS + 1):
+        p = posts[i - 1] if i <= len(posts) else None
+        save_small(make_row(p), f"row{i}.png")
+        target = p["url"] if p else "index.html"
+        with open(f"r{i}.html", "w", encoding="utf-8") as f:
+            f.write(make_redirect(target))
+
+
 def main():
     posts = get_day_posts()
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(make_page(posts))
     with open("news.json", "w", encoding="utf-8") as f:
         f.write(make_widget_json(posts))
+    write_widget_files(posts)
     print("Новостей за сегодня:", len(posts))
 
     if os.environ.get("SEND") != "true":
