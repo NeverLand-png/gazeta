@@ -19,7 +19,7 @@ SKIP = ("http", "Подробнее", "Открыть", "Фото", "Видео"
 FD = "/usr/share/fonts/truetype/dejavu/"
 PAPER, INK, GRAY = (244, 239, 225), (30, 30, 30), (95, 95, 95)
 RW, RH, HH = 1080, 205, 200
-ROWS = 6
+ROWS = 8
 
 
 def F(name, size):
